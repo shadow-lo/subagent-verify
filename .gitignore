@@ -1,0 +1,19 @@
+# subagent-verify local data never belongs in git
+.claude/subagent-verify/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.*
+credentials*.json
+
+# OS / editor / language noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+__pycache__/
+*.pyc

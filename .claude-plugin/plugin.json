@@ -1,0 +1,8 @@
+{
+  "name": "subagent-verify",
+  "version": "0.1.0",
+  "description": "Hook that checks whether files a subagent claims to have saved or changed really changed (git + filesystem + transcript) and warns the main agent when they did not.",
+  "author": { "name": "shadow-lo" },
+  "license": "MIT",
+  "keywords": ["hooks", "subagents", "verification", "quota-pilot", "issue-to-brief"]
+}
