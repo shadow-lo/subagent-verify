@@ -35,6 +35,8 @@ class Report:
     commands_run: List[str] = field(default_factory=list)
     tests: Optional[str] = None
     notes: str = ""
+    missing_fields: List[str] = field(default_factory=list)
+    unparsed_files: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -46,12 +48,26 @@ class Claims:
 
 
 # ---------------------------------------------------------------- WORKER REPORT
-_REPORT_HDR = re.compile(r"^\s{0,3}#{1,6}\s*WORKER\s+REPORT\s*#*\s*$", re.I | re.M)
-_KV = re.compile(r"^\s*[-*]?\s*([A-Za-z_]+)\s*:\s*(.*)$")
+_REPORT_HDR = re.compile(r"^\s{0,3}(?:#{1,6}\s*|\*\*\s*)WORKER\s+REPORT\s*(?:#*|\*\*)\s*:?\s*$", re.I | re.M)
+_KV = re.compile(r"^\s*[-*]?\s*(?:\*\*|__|`)?([A-Za-z_]+)(?:\*\*|__|`)?\s*:\s*(?:\*\*|__)?\s*(.*?)\s*(?:\*\*|__)?\s*$")
+REPORT_FIELDS = ("status", "files_changed", "commands_run", "tests", "notes")
+_FENCE = re.compile(r"^\s{0,3}(```|~~~)")
+
+
+def strip_fences(text: str) -> str:
+    """Blank out fenced code blocks (keeps line count), so templates/examples are not parsed."""
+    out, in_fence = [], False
+    for line in text.splitlines():
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            out.append("")
+        else:
+            out.append("" if in_fence else line)
+    return "\n".join(out)
 
 
 def _split_list(value: str) -> List[str]:
-    value = value.strip()
+    value = value.strip().strip("[]").strip()
     if not value or value.lower() in ("none", "n/a", "-", "yok", "[]"):
         return []
     items = []
@@ -63,10 +79,12 @@ def _split_list(value: str) -> List[str]:
 
 
 def parse_report(text: str) -> Report:
+    text = strip_fences(text)
     matches = list(_REPORT_HDR.finditer(text))
     if not matches:
         return Report()
     rep = Report(present=True)
+    seen = set()
     body = text[matches[-1].end():].splitlines()[1:40]
     for line in body:
         if not line.strip():
@@ -76,7 +94,8 @@ def parse_report(text: str) -> Report:
         m = _KV.match(line)
         if not m:
             continue
-        key, val = m.group(1).lower(), m.group(2).strip()
+        key, val = m.group(1).lower(), m.group(2).strip().strip("`").strip()
+        seen.add(key)
         if key == "status":
             v = val.lower().strip("` ")
             rep.status = v if v in ("done", "partial", "blocked") else "invalid"
@@ -89,6 +108,7 @@ def parse_report(text: str) -> Report:
             rep.tests = v if v in ("passed", "failed", "not_run") else "invalid"
         elif key == "notes":
             rep.notes = val
+    rep.missing_fields = [f for f in REPORT_FIELDS if f not in seen]
     return rep
 
 
@@ -103,9 +123,9 @@ _TR_MODIFY = (r"(?:güncelledim|güncellendi|değiştirdim|değiştirildi|düzen
 _TR_DELETE = r"(?:sildim|silindi|kaldırdım|kaldırıldı)"
 
 _VERB = {
-    CREATE: re.compile(rf"(?i)(?<![\w-])(?:{_EN_CREATE}|{_TR_CREATE}|create|add|write)(?![\w-])"),
-    MODIFY: re.compile(rf"(?i)(?<![\w-])(?:{_EN_MODIFY}|{_TR_MODIFY}|modify|update|edit|change|fix|save)(?![\w-])"),
-    DELETE: re.compile(rf"(?i)(?<![\w-])(?:{_EN_DELETE}|{_TR_DELETE}|delete|remove)(?![\w-])"),
+    CREATE: re.compile(rf"(?i)(?<![\w-])(?:{_EN_CREATE}|{_TR_CREATE})(?![\w-])"),
+    MODIFY: re.compile(rf"(?i)(?<![\w-])(?:{_EN_MODIFY}|{_TR_MODIFY})(?![\w-])"),
+    DELETE: re.compile(rf"(?i)(?<![\w-])(?:{_EN_DELETE}|{_TR_DELETE})(?![\w-])"),
 }
 _ANY_VERB = re.compile("|".join(f"(?:{p.pattern[4:]})" for p in _VERB.values()), re.I)
 
@@ -117,8 +137,13 @@ _TR_FIRST = re.compile(r"(?i)(?:dım|dim|dum|düm|tım|tim|tum|tüm)\b")
 _NEGATION = re.compile(
     r"(?i)\b(?:no changes?|not (?:modified|changed|touched|edited|updated|created)|"
     r"did(?:n'?t| not) (?:modify|change|touch|edit|update|create|delete|remove)|unchanged|untouched|"
-    r"left (?:as is|alone)|without (?:changing|modifying|touching)|would|should|could|need to|todo|"
-    r"değiştirmedim|dokunmadım|değişmedi|güncellemedim|aynı kaldı|gerekiyor|yapılmalı)\b"
+    r"left (?:as is|alone)|without (?:changing|modifying|touching)|"
+    r"(?:would|should|could|might|must)(?:n'?t| not)?\s+(?:also\s+)?(?:be|have|get|need)|"
+    r"need(?:s|ed)? to|going to|plan(?:ned)? to|want(?:ed)? to|todo|follow[- ]up|next step|if you|"
+    r"nothing (?:needed|to|was)|no need|didn'?t (?:find|need)|did not (?:find|need)|not needed|"
+    r"wasn'?t|was not|weren'?t|were not|haven'?t|have not|hasn'?t|has not|already (?:up to date|correct)|"
+    r"değiştirmedim|dokunmadım|değişmedi|güncellemedim|aynı kaldı|gerekiyor|yapılmalı|gerek yok|"
+    r"değiştirilmedi|yapacağım|edeceğim|ister misin|istersen)\b|\?\s*$"
 )
 _LIST_HEADER = re.compile(
     r"(?i)^\s*(?:#+\s*|\*\*)?\s*(?:files? (?:changed|modified|created|touched|edited|added|deleted|removed)|"
@@ -146,6 +171,10 @@ def _looks_like_path(tok: str) -> bool:
         return bool(re.search(r"[\w]", tok))
     return bool(re.search(r"\.[A-Za-z][A-Za-z0-9]{0,9}$", tok)) or tok in (
         "Makefile", "Dockerfile", "LICENSE", "README", "Gemfile", "Procfile", "Justfile")
+
+
+def _report_path_ok(tok: str) -> bool:
+    return bool(tok) and len(tok) <= 300 and "://" not in tok and not re.search(r"[\x00-\x1f\x7f]", tok)
 
 
 def _tokens(line: str):
@@ -267,9 +296,11 @@ def extract(text: str) -> Claims:
     files: List[Claim] = []
     seen: Dict[str, int] = {}
     for tok in rep.files_changed:
-        if _looks_like_path(tok):
+        if _report_path_ok(tok):
             seen[tok] = len(files)
             files.append(Claim(tok, MODIFY, "report", True))
+        else:
+            rep.unparsed_files.append(tok)
     for c in parse_text_claims(text):
         if c.token in seen:
             prev = files[seen[c.token]]
@@ -278,6 +309,8 @@ def extract(text: str) -> Claims:
             continue
         seen[c.token] = len(files)
         files.append(c)
-    tests_passed = rep.tests == "passed" or bool(_TESTS_PASSED.search(text))
-    completion = rep.status == "done" if rep.present else bool(_COMPLETION.search(text[-2000:]))
+    plain = strip_fences(text)
+    tests_passed = rep.tests == "passed" or any(
+        _TESTS_PASSED.search(ln) and not _NEGATION.search(ln) for ln in plain.splitlines()[:MAX_LINES])
+    completion = rep.status == "done" if rep.present else bool(_COMPLETION.search(plain[-2000:]))
     return Claims(rep, files[:MAX_CLAIMS], tests_passed, completion)

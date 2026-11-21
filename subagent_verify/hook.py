@@ -1,10 +1,9 @@
 """Claude Code hook entry point.
 
 Events handled (all fail open: any internal error exits 0 without blocking the session):
-  PreToolUse  (Task|Agent)  -> snapshot the working tree before the subagent runs
+  PreToolUse  (Task|Agent)  -> snapshot the working tree + pre-run brief/config before the subagent runs
+  SubagentStart             -> same, keyed by agent_id; remind delegated workers of the WORKER REPORT
   PostToolUse (Task|Agent)  -> verify the subagent's claims, tell the main agent
-  SubagentStart             -> snapshot keyed by agent_id; remind delegated workers of the
-                               WORKER REPORT contract
   SubagentStop              -> verify from the snapshot and the subagent's transcript; for strict agents,
                                block the stop once so the subagent can fix or correct itself
 """
@@ -13,14 +12,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from . import claims as claims_mod
 from . import gitutil, policy, snapshot, state, transcript
-from .paths import real_root
-from .util import MAX_STDIN_BYTES, clean, ensure_private_dir
+from .paths import is_within, real_root
+from .util import MAX_STDIN_BYTES, clean
 from .verify import FAIL, render, verify
 
 AGENT_TOOLS = {"Task", "Agent"}
@@ -42,17 +42,22 @@ def _read_stdin() -> Optional[dict]:
     return obj if isinstance(obj, dict) else None
 
 
-def _root(payload: dict) -> Optional[str]:
+def _roots(payload: dict) -> Tuple[Optional[str], Optional[str]]:
+    """(root, base): root is the git toplevel (or the project dir outside git); base is the
+    Claude Code project dir, against which relative claims are resolved first."""
     for cand in (os.environ.get("CLAUDE_PROJECT_DIR"), payload.get("cwd")):
-        r = real_root(cand) if cand else None
-        if r:
-            top = gitutil.toplevel(r)
-            return top if top and real_root(top) else r
-    return None
+        base = real_root(cand) if isinstance(cand, str) and cand else None
+        if base:
+            top = gitutil.toplevel(base)
+            top = real_root(top) if top else None
+            if top and is_within(base, top):
+                return top, base
+            return base, base
+    return None, None
 
 
 def _text(obj: Any, depth: int = 0) -> str:
-    """Pull human text out of a Task/Agent tool_response of any shape."""
+    """Pull human text out of a Task/Agent tool_response of any shape (never the prompt)."""
     if depth > 6:
         return ""
     if isinstance(obj, str):
@@ -81,25 +86,66 @@ def _subagent_transcript(payload: dict, response: Any) -> Optional[str]:
     return cand if os.path.isfile(cand) else None
 
 
+# ---------------------------------------------------------------- results log
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def _open_dir_chain(root: str, parts) -> Optional[int]:
+    """Open root/part1/part2 one component at a time with O_NOFOLLOW (no symlink can redirect
+    us mid-way). Creates missing components with mode 0700. Returns a dir fd or None."""
+    try:
+        fd = os.open(root, _DIR_FLAGS)
+    except OSError:
+        return None
+    try:
+        for i, part in enumerate(parts):
+            try:
+                nfd = os.open(part, _DIR_FLAGS, dir_fd=fd)
+            except FileNotFoundError:
+                os.mkdir(part, 0o700 if i == len(parts) - 1 else 0o755, dir_fd=fd)
+                nfd = os.open(part, _DIR_FLAGS, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        st = os.fstat(fd)
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            os.close(fd)
+            return None
+        return fd
+    except OSError:
+        os.close(fd)
+        return None
+
+
+def _open_own_file(dfd: int, name: str, flags: int) -> Optional[int]:
+    """Open a regular, single-link file we own inside dfd; refuse symlinks and hard links."""
+    try:
+        fd = os.open(name, flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), 0o600, dir_fd=dfd)
+    except OSError:
+        return None
+    st = os.fstat(fd)
+    if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1
+            or (hasattr(os, "getuid") and st.st_uid != os.getuid())):
+        os.close(fd)
+        return None
+    return fd
+
+
 def _log_result(root: str, settings: policy.Settings, res, agent_type: str) -> None:
     """Append one metadata-only line for quota-pilot. No contents, prompts or paths."""
     if not settings.results_log:
         return
-    d = os.path.join(root, ".claude", "subagent-verify")
+    dfd = _open_dir_chain(root, [".claude", "subagent-verify"])
+    if dfd is None:
+        return
     try:
-        if os.path.islink(os.path.join(root, ".claude")) or os.path.islink(d):
-            return
-        if not ensure_private_dir(d):
-            return
-        gi = os.path.join(d, ".gitignore")
-        if not os.path.lexists(gi):
-            fd = os.open(gi, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-            with os.fdopen(fd, "w") as fh:
+        gfd = _open_own_file(dfd, ".gitignore", os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        if gfd is not None:
+            with os.fdopen(gfd, "w") as fh:
                 fh.write("*\n")
-        path = os.path.join(d, "results.jsonl")
         try:
-            if os.lstat(path).st_size > RESULTS_MAX_BYTES:
-                os.replace(path, path + ".1")
+            st = os.stat("results.jsonl", dir_fd=dfd, follow_symlinks=False)
+            if st.st_size > RESULTS_MAX_BYTES:
+                os.replace("results.jsonl", "results.jsonl.1", src_dir_fd=dfd, dst_dir_fd=dfd)
         except FileNotFoundError:
             pass
         name = policy.base_name(agent_type)
@@ -112,11 +158,43 @@ def _log_result(root: str, settings: policy.Settings, res, agent_type: str) -> N
             "unverified_claims": res.unverified,
             "missing_report": res.missing_report,
         }, separators=(",", ":"))
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
+        fd = _open_own_file(dfd, "results.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+        if fd is not None:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
     except OSError:
         pass
+    finally:
+        os.close(dfd)
+
+
+# ---------------------------------------------------------------- pre-run context
+def _control_sigs(root: str) -> dict:
+    return {p: snapshot.file_sig(os.path.join(root, p)) for p in policy.CONTROL_FILES}
+
+
+def _pre_context(root: str, settings: policy.Settings) -> dict:
+    brief = policy.load_brief(root, settings)
+    extra = list(policy.CONTROL_FILES)
+    if brief:
+        extra += snapshot.extra_paths(root, brief.must_not_touch)
+    return {"snap": snapshot.take(root, extra), "brief": policy.brief_to_dict(brief),
+            "strict_agents": sorted(settings.strict_agents), "control": _control_sigs(root)}
+
+
+def _post_context(root: str, settings: policy.Settings, data: Optional[dict]):
+    """Combine pre-run and current inputs so a subagent cannot weaken its own check."""
+    current = policy.load_brief(root, settings)
+    if not data:
+        return None, current, []
+    if isinstance(data.get("strict_agents"), list):
+        settings.strict_agents |= {policy.base_name(x) for x in data["strict_agents"][:200] if policy.base_name(x)}
+    brief = policy.merge_briefs(policy.brief_from_dict(data.get("brief")), current)
+    pre = data.get("control") if isinstance(data.get("control"), dict) else {}
+    now = _control_sigs(root)
+    changed = [p for p in policy.CONTROL_FILES if p in pre and pre.get(p) != now.get(p)]
+    return data["snap"], brief, changed
 
 
 def _emit(obj: dict) -> None:
@@ -126,7 +204,7 @@ def _emit(obj: dict) -> None:
 
 def handle(payload: dict) -> int:
     event = payload.get("hook_event_name")
-    root = _root(payload)
+    root, base = _roots(payload)
     if not root:
         return 0
     settings = policy.load(root)
@@ -145,12 +223,13 @@ def handle(payload: dict) -> int:
         if tool_input.get("run_in_background") is True:
             return 0  # still running when PostToolUse fires; SubagentStart/SubagentStop cover it
         if event == "PreToolUse":
-            state.save(session_id, tool_use_id, root, snapshot.take(root))
+            state.save(session_id, tool_use_id, root, _pre_context(root, settings))
             return 0
-        before = state.pop(session_id, tool_use_id, root)
+        data = state.pop(session_id, tool_use_id, root)
         response = payload.get("tool_response")
         if isinstance(response, dict) and response.get("status") not in (None, "completed"):
             return 0  # async_launched / failed: nothing finished to verify yet
+        before, brief, control_changed = _post_context(root, settings, data)
         text = _text(response)[:MAX_RESPONSE_TEXT]
         tpath = _subagent_transcript(payload, response)
         ev = transcript.read(tpath) if tpath else None
@@ -161,22 +240,24 @@ def handle(payload: dict) -> int:
         model = tool_input.get("model") if isinstance(tool_input.get("model"), str) else None
         if not model and isinstance(response, dict) and isinstance(response.get("resolvedModel"), str):
             model = response["resolvedModel"]
-        strict = policy.is_strict(settings, agent_type, model)
+        level = policy.strictness(settings, agent_type, model)
         delegated = policy.base_name(agent_type) in settings.delegated
         c = claims_mod.extract(text)
-        if not c.files and not c.tests_passed_claimed and not delegated and before is None:
+        if not c.files and not c.tests_passed_claimed and not delegated and before is None and not brief:
             return 0
-        res = verify(root, c, agent=agent_type, strict=strict, delegated=delegated,
-                     before=before, evidence=ev, brief=policy.load_brief(root, settings))
+        res = verify(root, c, agent=agent_type, level=level, delegated=delegated, base=base,
+                     before=before, evidence=ev, brief=brief, control_changed=control_changed)
         _log_result(root, settings, res, agent_type)
         if res.verdict == "ok" and not res.criteria:
             return 0
         msg = render(res)
-        if res.verdict == "fail":
+        if res.verdict == "fail" and res.strict:
             # "block" on PostToolUse does not undo anything; it makes Claude read the reason.
             out = {"decision": "block", "reason": msg, "systemMessage": clean(msg.splitlines()[0], 200)}
         else:
             out = {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": msg}}
+            if res.verdict == "fail":
+                out["systemMessage"] = clean(msg.splitlines()[0], 200)
         _emit(out)
         return 0
 
@@ -188,24 +269,26 @@ def handle(payload: dict) -> int:
         key = f"agent:{agent_id}" if agent_id else ""
         if event == "SubagentStart":
             if key:
-                state.save(session_id, key, root, snapshot.take(root))
+                state.save(session_id, key, root, _pre_context(root, settings))
             if policy.base_name(agent_type) in settings.delegated:
                 _emit({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": START_REMINDER}})
             return 0
-        before = state.pop(session_id, key, root) if key else None
-        strict = policy.is_strict(settings, agent_type)
-        delegated = policy.base_name(agent_type) in settings.delegated
+        data = state.pop(session_id, key, root) if key else None
+        before, brief, control_changed = _post_context(root, settings, data)
         ev = transcript.read(payload.get("agent_transcript_path"))
+        level = policy.strictness(settings, agent_type, ev.model)
+        delegated = policy.base_name(agent_type) in settings.delegated
         text = payload.get("last_assistant_message") if isinstance(payload.get("last_assistant_message"), str) else ""
         text = text or ev.final_text
         if not ev.readable and not text:
             return 0
         c = claims_mod.extract(text)
-        if not c.files and not c.tests_passed_claimed and not delegated:
+        if not c.files and not c.tests_passed_claimed and not delegated and not control_changed:
             return 0
-        res = verify(root, c, agent=agent_type or "subagent", strict=strict, delegated=delegated,
-                     before=before, evidence=ev if ev.readable else None, brief=policy.load_brief(root, settings))
-        if res.verdict != "fail" or not strict or payload.get("stop_hook_active"):
+        res = verify(root, c, agent=agent_type or "subagent", level=level, delegated=delegated, base=base,
+                     before=before, evidence=ev if ev.readable else None, brief=brief,
+                     control_changed=control_changed)
+        if res.verdict != "fail" or not res.strict or payload.get("stop_hook_active"):
             return 0  # PostToolUse reports to the main agent; never loop
         fails = [i for i in res.items if i.level == FAIL]
         reason = ["subagent-verify found problems with your final report. Before stopping, either do the work "

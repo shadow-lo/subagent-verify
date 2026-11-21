@@ -39,6 +39,7 @@ class Evidence:
     start_ts: Optional[float] = None
     final_text: str = ""
     readable: bool = False
+    model: Optional[str] = None
 
     def written_paths(self) -> Dict[str, bool]:
         """path -> True if at least one successful write tool call targeted it."""
@@ -78,7 +79,7 @@ def read(path: str) -> Evidence:
     if not isinstance(path, str) or not path or "\0" in path:
         return ev
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError:
         return ev
     try:
@@ -116,6 +117,8 @@ def read(path: str) -> Evidence:
         role = msg.get("role") or entry.get("type")
         content = msg.get("content")
         if role == "assistant":
+            if isinstance(msg.get("model"), str) and len(msg["model"]) < 100:
+                ev.model = msg["model"]
             t = _text_of(content)
             if t.strip():
                 last_text = t

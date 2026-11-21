@@ -38,12 +38,12 @@ git clone https://github.com/shadow-lo/subagent-verify .claude/hooks/subagent-ve
 
 ## 🔗 quota-pilot ve issue-to-brief ile birlikte
 
-- **quota-pilot:** `haiku-worker` ve `sonnet-worker` varsayılan olarak katıdır; Haiku modelde çalışan her alt ajan da katıdır. WORKER REPORT içindeki `files_changed` listesindeki her dosya gerçekten değişmiş olmalı, `tests: passed` için gerçek test çalıştırması gerekir. Her kontrol `.claude/subagent-verify/results.jsonl` dosyasına yalnızca meta veri içeren bir satır yazar; quota-pilot bunu okuyup sürekli hata yapan ucuz işçiyi bir üst seviyeye çıkarabilir.
-- **issue-to-brief:** `.claude/briefs/current.json` varsa `must_not_touch` altındaki her değişiklik `PROTECTED` hatasıdır; iş bitti denildiğinde dokunulmamış `likely` dosyalar ve kabul kriterleri ana ajana listelenir. Brief GitHub issue metninden geldiği için güvenilmez kabul edilir: asla çalıştırılmaz, yolları doğrulanır, metni kısaltılıp temizlenir.
+- **quota-pilot:** `sonnet-worker` katı, `haiku-worker` ve Haiku modelde çalışan her alt ajan en katı seviyededir (en katı seviyede rapor eksikleri, kanıtsız test iddiaları ve bahsedilmeyen yazmalar da hata sayılır). `commands_run` içindeki her komutun transkriptte gerçekten çalıştırılmış olması gerekir. WORKER REPORT içindeki `files_changed` listesindeki her dosya gerçekten değişmiş olmalı, `tests: passed` için gerçek test çalıştırması gerekir. Her kontrol `.claude/subagent-verify/results.jsonl` dosyasına yalnızca meta veri içeren bir satır yazar; quota-pilot bunu okuyup sürekli hata yapan ucuz işçiyi bir üst seviyeye çıkarabilir.
+- **issue-to-brief:** `.claude/briefs/current.json` varsa `must_not_touch` altındaki her değişiklik (git'in yok saydığı `.env` gibi dosyalar dahil) `PROTECTED` hatasıdır; brief alt ajan çalışmadan **önce** okunur, bu yüzden alt ajan brief'i silse ya da değiştirse de korumayı kaldıramaz (`CONTROL_CHANGED`); iş bitti denildiğinde dokunulmamış `likely` dosyalar ve kabul kriterleri ana ajana listelenir. Brief GitHub issue metninden geldiği için güvenilmez kabul edilir: asla çalıştırılmaz, yolları doğrulanır, metni kısaltılıp temizlenir.
 
 ## 🔒 Güvenlik
 
-Shell yok, ağ yok, bağımlılık yok; Python izole modda (`-I`) çalışır; git çağrıları sabit argümanlarla ve programı çalıştırabilecek repo ayarları kapatılarak yapılır; path traversal ve symlink kaçışı engellenir; gizli bilgiler `[REDACTED]` ile maskelenir; proje içindeki dosyalar kontrolü kapatamaz, yalnızca sıkılaştırabilir. Ayrıntılar: [SECURITY.md](SECURITY.md).
+Shell yok, ağ yok, bağımlılık yok; `git status` hiç çalıştırılmaz (repo içine yerleştirilmiş bir filtre programı çalışamasın diye dosyalar `git ls-files` ile listelenip hook tarafından hash'lenir); sonuç dosyası symlink ya da hard link ile proje dışına yönlendirilemez; Python izole modda (`-I`) çalışır; git çağrıları sabit argümanlarla ve programı çalıştırabilecek repo ayarları kapatılarak yapılır; path traversal ve symlink kaçışı engellenir; gizli bilgiler `[REDACTED]` ile maskelenir; proje içindeki dosyalar kontrolü kapatamaz, yalnızca sıkılaştırabilir. Ayrıntılar: [SECURITY.md](SECURITY.md).
 
 ## ⚠️ Sınırlar
 

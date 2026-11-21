@@ -18,9 +18,14 @@ class TestPostToolUse(HookCase):
     def test_claimed_but_unchanged(self):
         self.pre()
         out = self.post("I updated `src/app.py` to handle errors.")
-        self.assertEqual(out["decision"], "block")
-        self.assertIn("UNCHANGED src/app.py", out["reason"])
+        # non-strict agent: reported as context, not as a blocking error
+        self.assertNotIn("decision", out)
+        self.assertIn("UNCHANGED src/app.py", self.message(out))
         self.assertIn("FAIL", out["systemMessage"])
+        self.pre(agent="sonnet-worker")
+        out = self.post("I updated `src/app.py`." + report(files="src/app.py"), agent="sonnet-worker")
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("(strict", self.message(out))
 
     def test_rewrite_with_same_content_is_unchanged(self):
         self.write("src/app.py", "dirty\n")
@@ -32,12 +37,12 @@ class TestPostToolUse(HookCase):
     def test_claimed_created_but_missing(self):
         self.pre()
         out = self.post("Created `tests/test_app.py` with 5 tests.")
-        self.assertIn("MISSING tests/test_app.py", out["reason"])
+        self.assertIn("MISSING tests/test_app.py", self.message(out))
 
     def test_claimed_deleted_but_exists(self):
         self.pre()
         out = self.post("- Deleted `README.md`")
-        self.assertIn("NOT_DELETED README.md", out["reason"])
+        self.assertIn("NOT_DELETED README.md", self.message(out))
 
     def test_deleted_ok(self):
         self.pre()
@@ -81,7 +86,7 @@ class TestPostToolUse(HookCase):
         self.write("src/app.py", "A\n")
         self.assertIsNone(self.post("I updated `src/app.py`.", tool_use_id="A"))
         out = self.post("I updated `README.md`.", tool_use_id="B")
-        self.assertIn("UNCHANGED README.md", out["reason"])
+        self.assertIn("UNCHANGED README.md", self.message(out))
 
     def test_background_agent_skipped(self):
         self.pre()
@@ -92,7 +97,7 @@ class TestPostToolUse(HookCase):
         self.pre()
         out = self.post("x", response={"status": "completed", "resolvedModel": "claude-haiku-5-5",
                                        "content": [{"type": "text", "text": "I updated `src/app.py`."}]})
-        self.assertIn("(strict)", out["reason"])
+        self.assertIn("(strict", self.message(out))
 
     def test_prompt_field_is_not_parsed_as_claims(self):
         self.pre()
@@ -151,14 +156,14 @@ class TestQuotaPilot(HookCase):
         self.pre(agent="sonnet-worker")
         self.write("src/app.py", "v2\n")
         out = self.post("I updated `src/app.py`.", agent="sonnet-worker")
-        self.assertIn("NO_REPORT", out["reason"])
+        self.assertIn("NO_REPORT", self.message(out))
 
     def test_report_files_unchanged(self):
         self.pre(agent="haiku-worker")
         out = self.post("ok" + report(files="src/app.py, src/gone.py"), agent="haiku-worker")
-        self.assertIn("UNCHANGED src/app.py", out["reason"])
-        self.assertIn("MISSING src/gone.py", out["reason"])
-        self.assertIn("(strict)", out["reason"])
+        self.assertIn("UNCHANGED src/app.py", self.message(out))
+        self.assertIn("MISSING src/gone.py", self.message(out))
+        self.assertIn("(strict", self.message(out))
 
     def test_delegated_file_cannot_lower(self):
         self.write(".claude/quota-pilot/delegated-agents.json", json.dumps(
@@ -168,7 +173,7 @@ class TestQuotaPilot(HookCase):
         self.assertIn("NO_REPORT", self.message(self.post("hi", agent="haiku-worker")))
         self.pre(agent="cheap-bot")
         out = self.post("I updated `src/app.py`.", agent="cheap-bot")
-        self.assertIn("(strict)", out["reason"])
+        self.assertIn("(strict", self.message(out))
 
     def test_results_log_refuses_symlink(self):
         target = os.path.join(self.tmp, "elsewhere")
@@ -198,7 +203,7 @@ class TestBrief(HookCase):
         self.write("src/app.py", "v2\n")
         self.write("README.md", "hacked\n")
         out = self.post("Done" + report(files="src/app.py, README.md"), agent="haiku-worker")
-        msg = out["reason"]
+        msg = self.message(out)
         self.assertIn("PROTECTED README.md", msg)
         self.assertIn("o/r#7", msg)
         self.assertIn("AC1: Errors are logged", msg)
@@ -270,7 +275,7 @@ class TestNonGit(HookCase):
         self.assertIsNone(self.post("I updated `src/app.py`."))
         self.pre()
         out = self.post("I updated `README.md`.")
-        self.assertIn("UNCHANGED README.md", out["reason"])
+        self.assertIn("UNCHANGED README.md", self.message(out))
 
 
 class TestSubagentStop(HookCase):
@@ -309,7 +314,7 @@ class TestSubagentStop(HookCase):
                                          [("Edit", {"file_path": os.path.join(self.root, "src/app.py")}, True)]))
         out = self.stop(p)
         self.assertEqual(out["decision"], "block")
-        self.assertIn("TESTS_NOT_RUN", out["reason"])
+        self.assertIn("TESTS_NOT_RUN", self.message(out))
 
     def test_stop_hook_active_never_loops(self):
         p = self.transcript(self.entries("Done" + report(files="src/app.py", tests="passed")))
@@ -327,7 +332,7 @@ class TestSubagentStop(HookCase):
         p = self.transcript(self.entries("Done" + report(files="src/app.py", tests="passed"), [
             ("Edit", {"file_path": os.path.join(self.root, "src/app.py")}, True),
             ("Bash", {"command": "npm test"}, False)]))
-        self.assertIn("TESTS_FAILED", self.stop(p)["reason"])
+        self.assertIn("TESTS_FAILED", self.message(self.stop(p)))
 
     def test_old_file_claimed_changed_blocks(self):
         old = time.time() - 3600
@@ -335,8 +340,8 @@ class TestSubagentStop(HookCase):
         p = self.transcript(self.entries("Done" + report(files="src/app.py"),
                                          [("Edit", {"file_path": os.path.join(self.root, "src/app.py")}, False)]))
         out = self.stop(p)
-        self.assertIn("UNCHANGED src/app.py", out["reason"])
-        self.assertIn("write tool call failed", out["reason"])
+        self.assertIn("UNCHANGED src/app.py", self.message(out))
+        self.assertIn("write tool call failed", self.message(out))
 
     def test_non_strict_agent_not_blocked(self):
         p = self.transcript(self.entries("I updated `src/gone.py`. All tests pass."))
@@ -361,8 +366,8 @@ class TestSubagentStop(HookCase):
                    "stop_hook_active": False,
                    "last_assistant_message": "Done" + report(files="src/app.py, README.md")}
         out = self.run_hook(payload)
-        self.assertIn("UNCHANGED README.md", out["reason"])
-        self.assertNotIn("src/app.py", out["reason"])
+        self.assertIn("UNCHANGED README.md", self.message(out))
+        self.assertNotIn("src/app.py", self.message(out))
         self.assertEqual(os.listdir(self.state), [])
 
     def test_missing_transcript(self):
@@ -390,7 +395,7 @@ class TestPostUsesSubagentTranscript(HookCase):
                    "tool_response": {"agentId": "abc123", "content": [
                        {"type": "text", "text": "I updated `src/app.py`. All tests pass."}]}}
         out = self.run_hook(payload)
-        self.assertIn("TESTS_NOT_RUN", out["reason"])
+        self.assertIn("TESTS_NOT_RUN", self.message(out))
 
 
 if __name__ == "__main__":

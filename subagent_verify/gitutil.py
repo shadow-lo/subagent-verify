@@ -1,5 +1,9 @@
-"""Hardened, read-only git calls. No shell, fixed argv, sanitised environment, and repo
-config that could run programs (fsmonitor, external diff, textconv, filters) disabled."""
+"""Hardened, read-only git calls. No shell, fixed argv, sanitised environment.
+
+Only plumbing commands that never run content filters are used (`ls-files`, `ls-tree`,
+`rev-parse`, `check-ignore`, tree-to-tree `diff --name-only`). In particular we never call
+`git status`, `diff-files` or `hash-object`, because those may run a `filter.<x>.clean` program
+that a subagent could plant through `.git/config` + `.gitattributes`. Content is hashed by us."""
 from __future__ import annotations
 
 import os
@@ -23,6 +27,9 @@ _SAFE_CONFIG = [
     "-c", "protocol.allow=never",
     "-c", "credential.helper=",
     "-c", "core.quotePath=false",
+    "-c", "core.attributesFile=/dev/null",
+    "-c", "core.sshCommand=false",
+    "-c", "uploadpack.packObjectsHook=",
 ]
 
 _ENV_KEEP = ("PATH", "HOME", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP")
@@ -85,19 +92,36 @@ def head(root: str) -> Optional[str]:
     return sha if all(c in "0123456789abcdef" for c in sha) and len(sha) in (40, 64) else None
 
 
-def status(root: str) -> Optional[dict]:
-    """Return {rel_path: two-letter XY status} for every dirty or untracked path."""
-    out = run_git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"])
-    if out is None:
+def list_files(root: str) -> Optional[dict]:
+    """{rel: "t"} for tracked files and {rel: "u"} for untracked, non-ignored files.
+    Uses only `ls-files`, which never runs filters or fsmonitor."""
+    tracked = run_git(root, ["ls-files", "-z", "--cached", "--full-name"])
+    if tracked is None:
         return None
+    others = run_git(root, ["ls-files", "-z", "--others", "--exclude-standard", "--full-name"])
     result = {}
-    for entry in out.split(b"\0"):
-        if len(entry) < 4:
-            continue
-        xy = entry[:2].decode("ascii", "replace")
-        rel = entry[3:].decode("utf-8", "surrogateescape")
-        if safe_rel(rel):
-            result[rel] = xy
+    for blob, tag in ((tracked, "t"), (others or b"", "u")):
+        for p in blob.split(b"\0"):
+            if not p:
+                continue
+            rel = p.decode("utf-8", "surrogateescape")
+            if safe_rel(rel):
+                result.setdefault(rel, tag)
+    return result
+
+
+def head_blobs(root: str, rels) -> dict:
+    """{rel: blob id at HEAD} for the given paths (ls-tree reads objects, runs nothing)."""
+    rels = [r for r in rels if safe_rel(r)][:500]
+    if not rels:
+        return {}
+    out = run_git(root, ["ls-tree", "-z", "--full-tree", "HEAD", "--", *rels])
+    result = {}
+    for entry in (out or b"").split(b"\0"):
+        meta, _, path = entry.partition(b"\t")
+        parts = meta.split()
+        if len(parts) == 3 and parts[1] == b"blob":
+            result[path.decode("utf-8", "surrogateescape")] = parts[2].decode("ascii", "replace")
     return result
 
 

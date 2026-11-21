@@ -54,6 +54,8 @@ def _load_delegated(path: str, settings: Settings) -> None:
         if not name:
             continue
         tier = a.get("tier") if a.get("tier") in ("haiku", "sonnet", "opus") else None
+        if name in BUILTIN_DELEGATED:
+            tier = BUILTIN_DELEGATED[name]  # a project file cannot relabel the built-in tiers
         settings.delegated[name] = tier or settings.delegated.get(name) or "unknown"
         if a.get("verify") == "strict" or tier == "haiku":
             settings.strict_agents.add(name)
@@ -71,11 +73,6 @@ def load(root: str, env: Optional[dict] = None) -> Settings:
         if cfg.get("mode") == "strict":
             s.mode = "strict"
         s.strict_agents |= _names(cfg.get("strict_agents"))
-        if cfg.get("results_log") is False:
-            s.results_log = False
-        bp = cfg.get("brief")
-        if isinstance(bp, str) and safe_rel(bp):
-            s.brief_path = os.path.join(root, bp)
 
     # quota-pilot delegated agents
     candidates = [os.path.join(root, ".claude", "quota-pilot", "delegated-agents.json")]
@@ -101,13 +98,24 @@ def load(root: str, env: Optional[dict] = None) -> Settings:
     return s
 
 
-def is_strict(settings: Settings, agent_type: Optional[str], model: Optional[str] = None) -> bool:
+NORMAL, STRICT, STRICTEST = 0, 1, 2
+
+
+def strictness(settings: Settings, agent_type: Optional[str], model: Optional[str] = None) -> int:
+    """0 = normal, 1 = strict (sonnet tier, listed agents, mode=strict), 2 = strictest (haiku:
+    the cheapest model, where unverified claims are most likely; warnings become failures)."""
     name = base_name(agent_type)
-    if settings.mode == "strict":
-        return True
-    if name and name in settings.strict_agents:
-        return True
-    return isinstance(model, str) and "haiku" in model.lower()
+    level = NORMAL
+    if settings.mode == "strict" or (name and name in settings.strict_agents):
+        level = STRICT
+    tier = settings.delegated.get(name) if name else None
+    if tier == "haiku" or (isinstance(model, str) and "haiku" in model.lower()):
+        level = STRICTEST
+    return level
+
+
+def is_strict(settings: Settings, agent_type: Optional[str], model: Optional[str] = None) -> bool:
+    return strictness(settings, agent_type, model) >= STRICT
 
 
 def is_ignored(settings: Settings, agent_type: Optional[str]) -> bool:
@@ -152,6 +160,49 @@ def load_brief(root: str, settings: Settings) -> Optional[Brief]:
 
     def _paths(key):
         v = files.get(key)
-        return [p for p in v[:300] if isinstance(p, str) and safe_rel(p)] if isinstance(v, list) else []
+        if not isinstance(v, list):
+            return []
+        out = []
+        for p in v[:300]:
+            if not isinstance(p, str):
+                continue
+            while p.startswith("./"):
+                p = p[2:]
+            p = p.replace("//", "/")
+            if p and safe_rel(p):
+                out.append(p)
+        return out
 
     return Brief(label, criteria, _paths("likely"), _paths("must_not_touch"))
+
+
+def brief_to_dict(b: Optional[Brief]) -> Optional[dict]:
+    return None if b is None else {"label": b.label, "criteria": b.criteria, "likely": b.likely,
+                                   "must_not_touch": b.must_not_touch}
+
+
+def brief_from_dict(d) -> Optional[Brief]:
+    if not isinstance(d, dict):
+        return None
+    try:
+        return Brief(str(d["label"]), [str(x) for x in d["criteria"]][:30],
+                     [x for x in d["likely"] if isinstance(x, str) and safe_rel(x)][:300],
+                     [x for x in d["must_not_touch"] if isinstance(x, str) and safe_rel(x)][:300])
+    except (KeyError, TypeError):
+        return None
+
+
+def merge_briefs(a: Optional[Brief], b: Optional[Brief]) -> Optional[Brief]:
+    """Union of protections: a brief changed mid-run can add rules but never remove them."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    def _u(x, y):
+        return list(dict.fromkeys(x + y))
+    return Brief(a.label, _u(a.criteria, b.criteria)[:30], _u(a.likely, b.likely)[:300],
+                 _u(a.must_not_touch, b.must_not_touch)[:300])
+
+
+CONTROL_FILES = (".claude/briefs/current.json", ".claude/subagent-verify.json",
+                 ".claude/quota-pilot/delegated-agents.json")

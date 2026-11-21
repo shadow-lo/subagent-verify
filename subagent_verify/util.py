@@ -11,26 +11,32 @@ from typing import Any
 MAX_STDIN_BYTES = 8 * 1024 * 1024        # hook input cap
 MAX_JSON_FILE_BYTES = 1 * 1024 * 1024    # config / brief / delegated-agents cap
 
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\ufff9-\ufffb]")
 
 # Patterns for things that look like credentials. Matches are replaced, never echoed.
 _R = "[REDACTED]"
+_NB = r"(?<![A-Za-z0-9])"          # start boundary that also works after "_"
+_KEYWORD = r"[A-Za-z0-9_.\-]*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|credential|auth)[A-Za-z0-9_.\-]*"
 _SECRET_PATTERNS = [
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.S), _R),
-    (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), _R),
-    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"), _R),
-    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"), _R),
-    (re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}\b"), _R),
-    (re.compile(r"\bsk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_\-]{16,}"), _R),
-    (re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}"), _R),
-    (re.compile(r"\bAIza[0-9A-Za-z_\-]{35}"), _R),
-    (re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"), _R),
-    (re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._\-~+/]{16,}=*"), r"\1 " + _R),
+    (re.compile(_NB + r"(?:AKIA|ASIA)[0-9A-Z]{16}"), _R),
+    (re.compile(_NB + r"gh[pousr]_[A-Za-z0-9_]{20,}"), _R),
+    (re.compile(_NB + r"github_pat_[A-Za-z0-9_]{20,}"), _R),
+    (re.compile(_NB + r"glpat-[A-Za-z0-9_\-]{20,}"), _R),
+    (re.compile(_NB + r"(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}"), _R),
+    (re.compile(_NB + r"sk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_\-]{16,}"), _R),
+    (re.compile(_NB + r"xox[abprs]-[A-Za-z0-9\-]{10,}"), _R),
+    (re.compile(_NB + r"AIza[0-9A-Za-z_\-]{30,}"), _R),
+    (re.compile(_NB + r"npm_[A-Za-z0-9]{20,}"), _R),
+    (re.compile(_NB + r"hf_[A-Za-z0-9]{20,}"), _R),
+    (re.compile(_NB + r"(?:dop|doo|dor)_v1_[a-f0-9]{32,}"), _R),
+    (re.compile(_NB + r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"), _R),
+    (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._\-~+/]{12,}=*"), r"\1 " + _R),
     (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^\s:/@]+:[^\s@/]+@"), r"\1" + _R + "@"),
-    (re.compile(
-        r"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret|auth)"
-        r"(\s*[:=]\s*)(?:\"[^\"]{4,}\"|'[^']{4,}'|[^\s,;\"']{4,})"
-    ), r"\1\2" + _R),
+    (re.compile(r"(?i)(" + _KEYWORD + r")(\s*[:=]\s*|\s+is\s+)(?:\"[^\"]{3,}\"|'[^']{3,}'|[^\s,;\"']{3,})"), r"\1\2" + _R),
+    # long high-entropy blobs (hex or base64) are almost never needed in a report
+    (re.compile(_NB + r"[A-Fa-f0-9]{40,}(?![A-Za-z0-9])"), _R),
+    (re.compile(_NB + r"(?=[A-Za-z0-9+/_\-]*[0-9])(?=[A-Za-z0-9+/_\-]*[A-Z])(?=[A-Za-z0-9+/_\-]*[a-z])[A-Za-z0-9+/_\-]{40,}={0,2}"), _R),
 ]
 
 
@@ -49,7 +55,7 @@ def clean(text: Any, maxlen: int = 200, *, oneline: bool = True) -> str:
         text = str(text)
     text = text[: maxlen * 4]
     if oneline:
-        text = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+        text = re.sub(r"[\r\n\t\v\f\x1c-\x1e\x85\u2028\u2029]", " ", text)
     text = _CONTROL.sub("", text)
     text = redact(text)
     text = re.sub(r"[ ]{2,}", " ", text).strip()

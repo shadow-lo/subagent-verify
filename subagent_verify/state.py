@@ -41,14 +41,15 @@ def _prune(directory: str) -> None:
         pass
 
 
-def save(session_id: str, tool_use_id: str, root: str, snap: dict, env: Optional[dict] = None) -> bool:
+def save(session_id: str, tool_use_id: str, root: str, data: dict, env: Optional[dict] = None) -> bool:
+    """data = {"snap": snapshot, ...extra pre-run context}."""
     if not (isinstance(session_id, str) and isinstance(tool_use_id, str) and tool_use_id):
         return False
     d = state_dir(env)
     if not ensure_private_dir(d):
         return False
     _prune(d)
-    return atomic_write_json(os.path.join(d, _key(session_id, tool_use_id)), {"root": root, "snap": snap})
+    return atomic_write_json(os.path.join(d, _key(session_id, tool_use_id)), dict(data, root=root))
 
 
 def pop(session_id: str, tool_use_id: str, root: str, env: Optional[dict] = None) -> Optional[dict]:
@@ -66,6 +67,10 @@ def pop(session_id: str, tool_use_id: str, root: str, env: Optional[dict] = None
     if not isinstance(data, dict) or data.get("root") != root or not isinstance(data.get("snap"), dict):
         return None
     snap = data["snap"]
-    if not isinstance(snap.get("files"), dict) or time.time() - float(snap.get("ts") or 0) > MAX_AGE:
+    try:
+        age = time.time() - float(snap.get("ts") or 0)
+    except (TypeError, ValueError):
         return None
-    return snap
+    if not isinstance(snap.get("files"), dict) or age > MAX_AGE:
+        return None
+    return data
