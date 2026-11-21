@@ -232,3 +232,53 @@ class TestAuditUnit(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAuditRound2(HookCase):
+    def test_redaction_is_linear_time(self):
+        import time as _t
+        for s in ["pwd" * 214, "token" * 160, "a" * 20000, "_" * 5000 + "token=", "A1a" * 300]:
+            t0 = _t.time()
+            util.redact(s)
+            util.clean(s, 200)
+            self.assertLess(_t.time() - t0, 0.5, s[:20])
+
+    def test_hostile_brief_does_not_slow_hook(self):
+        import time as _t
+        self.write(".claude/briefs/current.json", json.dumps({
+            "schema": 1, "acceptance_criteria": [{"id": f"A{i}", "text": "pwd" * 214} for i in range(30)],
+            "files": {"likely": ["src/app.py"], "must_not_touch": []}}))
+        t0 = _t.time()
+        self.pre(agent="haiku-worker")
+        self.write("src/app.py", "v2\n")
+        self.post("ok" + report(files="src/app.py"), agent="haiku-worker")
+        self.assertLess(_t.time() - t0, 10)
+
+    def test_paths_and_prose_not_over_redacted(self):
+        for s in ["src/components/settings/UserProfilePanel2Component.tsx",
+                  "tests/integration/test_UserAccountServiceV2Handler.py",
+                  "commit 3f78a1b2c3d4e5f60718293a4b5c6d7e8f90be8b", "author: Jane Doe",
+                  "the password is required", "token: refreshed hourly"]:
+            self.assertEqual(util.clean(s), s)
+
+    def test_prose_lies_with_side_clauses_are_caught(self):
+        lies = ["I updated `src/app.py`, which wasn't handling errors.",
+                "I updated `src/app.py` so it no longer fails if you pass None.",
+                "I updated `src/app.py` (should be faster now).",
+                "I refactored `src/app.py`; the old code was not thread-safe.",
+                "- Add retry logic to `src/app.py`", "- Update `src/app.py` to log errors"]
+        for text in lies:
+            self.pre()
+            self.assertIn("UNCHANGED src/app.py", self.message(self.post(text)), text)
+        self.assertTrue(claims.extract("I updated `src/app.py`. All tests pass and nothing was broken.").tests_passed_claimed)
+        self.assertFalse(claims.extract("Not all tests pass yet.").tests_passed_claimed)
+
+    def test_extra_paths_never_leave_root(self):
+        from subagent_verify import snapshot
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(os.path.join(outside, "sub"))
+        with open(os.path.join(outside, "sub", "f.txt"), "w") as fh:
+            fh.write("x")
+        os.makedirs(os.path.join(self.root, "a"))
+        os.symlink(outside, os.path.join(self.root, "a", "link"))
+        self.assertEqual(snapshot.extra_paths(self.root, ["a/link/sub/", "a/link/", "./", ".", "../outside/"]), [])

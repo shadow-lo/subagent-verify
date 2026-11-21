@@ -16,27 +16,32 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u00ad\u061c\u180e\u200b-\u2
 # Patterns for things that look like credentials. Matches are replaced, never echoed.
 _R = "[REDACTED]"
 _NB = r"(?<![A-Za-z0-9])"          # start boundary that also works after "_"
-_KEYWORD = r"[A-Za-z0-9_.\-]*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|credential|auth)[A-Za-z0-9_.\-]*"
+# Key names end with a secret-ish word (GITHUB_TOKEN, db_password, api-key). The prefix is
+# bounded and anchored so matching stays linear (no ReDoS on attacker-written text).
+_KEYNAME = (r"(?<![A-Za-z0-9_.\-])([A-Za-z0-9_.\-]{0,40}?(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|"
+            r"access[_-]?key|private[_-]?key|client[_-]?secret|credentials?|auth[_-]?token|authorization))")
+# A value counts as a secret when it is quoted, contains a digit, or is long (avoids "token: refreshed").
+_VALUE = r"(?:\"[^\"\n]{3,200}\"|'[^'\n]{3,200}'|(?=[^\s,;\"']{0,200}[0-9])[^\s,;\"']{3,200}|[^\s,;\"']{12,200})"
 _SECRET_PATTERNS = [
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.S), _R),
+    (re.compile(r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----.*?(?:-----END [A-Z ]{0,40}PRIVATE KEY-----|$)", re.S), _R),
     (re.compile(_NB + r"(?:AKIA|ASIA)[0-9A-Z]{16}"), _R),
-    (re.compile(_NB + r"gh[pousr]_[A-Za-z0-9_]{20,}"), _R),
-    (re.compile(_NB + r"github_pat_[A-Za-z0-9_]{20,}"), _R),
-    (re.compile(_NB + r"glpat-[A-Za-z0-9_\-]{20,}"), _R),
-    (re.compile(_NB + r"(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}"), _R),
-    (re.compile(_NB + r"sk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_\-]{16,}"), _R),
-    (re.compile(_NB + r"xox[abprs]-[A-Za-z0-9\-]{10,}"), _R),
-    (re.compile(_NB + r"AIza[0-9A-Za-z_\-]{30,}"), _R),
-    (re.compile(_NB + r"npm_[A-Za-z0-9]{20,}"), _R),
-    (re.compile(_NB + r"hf_[A-Za-z0-9]{20,}"), _R),
-    (re.compile(_NB + r"(?:dop|doo|dor)_v1_[a-f0-9]{32,}"), _R),
-    (re.compile(_NB + r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"), _R),
-    (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._\-~+/]{12,}=*"), r"\1 " + _R),
-    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^\s:/@]+:[^\s@/]+@"), r"\1" + _R + "@"),
-    (re.compile(r"(?i)(" + _KEYWORD + r")(\s*[:=]\s*|\s+is\s+)(?:\"[^\"]{3,}\"|'[^']{3,}'|[^\s,;\"']{3,})"), r"\1\2" + _R),
-    # long high-entropy blobs (hex or base64) are almost never needed in a report
-    (re.compile(_NB + r"[A-Fa-f0-9]{40,}(?![A-Za-z0-9])"), _R),
-    (re.compile(_NB + r"(?=[A-Za-z0-9+/_\-]*[0-9])(?=[A-Za-z0-9+/_\-]*[A-Z])(?=[A-Za-z0-9+/_\-]*[a-z])[A-Za-z0-9+/_\-]{40,}={0,2}"), _R),
+    (re.compile(_NB + r"gh[pousr]_[A-Za-z0-9_]{20,255}"), _R),
+    (re.compile(_NB + r"github_pat_[A-Za-z0-9_]{20,255}"), _R),
+    (re.compile(_NB + r"glpat-[A-Za-z0-9_\-]{20,255}"), _R),
+    (re.compile(_NB + r"(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,255}"), _R),
+    (re.compile(_NB + r"sk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_\-]{16,255}"), _R),
+    (re.compile(_NB + r"xox[abprs]-[A-Za-z0-9\-]{10,255}"), _R),
+    (re.compile(_NB + r"AIza[0-9A-Za-z_\-]{30,255}"), _R),
+    (re.compile(_NB + r"npm_[A-Za-z0-9]{20,255}"), _R),
+    (re.compile(_NB + r"hf_[A-Za-z0-9]{20,255}"), _R),
+    (re.compile(_NB + r"(?:dop|doo|dor)_v1_[a-f0-9]{32,255}"), _R),
+    (re.compile(_NB + r"eyJ[A-Za-z0-9_\-]{8,2000}\.[A-Za-z0-9_\-]{8,2000}\.[A-Za-z0-9_\-]{8,2000}"), _R),
+    (re.compile(r"(?i)\b(bearer|basic)[ \t]{1,5}[A-Za-z0-9._\-~+/]{12,2000}=*"), r"\1 " + _R),
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,20}://)[^\s:/@]{1,200}:[^\s@/]{1,200}@"), r"\1" + _R + "@"),
+    (re.compile(r"(?i)" + _KEYNAME + r"([ \t]{0,3}[:=][ \t]{0,3})" + _VALUE), r"\1\2" + _R),
+    # long mixed-case base64-ish blobs; '/', '.', '_' and '-' are excluded so file paths survive
+    (re.compile(r"(?<![A-Za-z0-9+/._\-])(?=[A-Za-z0-9+]{0,200}[0-9])(?=[A-Za-z0-9+]{0,200}[A-Z])"
+                r"(?=[A-Za-z0-9+]{0,200}[a-z])[A-Za-z0-9+]{40,512}={0,2}(?![A-Za-z0-9+/._\-])"), _R),
 ]
 
 

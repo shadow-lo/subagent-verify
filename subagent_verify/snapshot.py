@@ -12,7 +12,7 @@ import time
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from . import gitutil
-from .paths import safe_rel
+from .paths import resolve_in_root, safe_rel
 
 SKIP_DIRS = {
     ".git", "node_modules", ".venv", "venv", "__pycache__", ".tox", ".mypy_cache",
@@ -99,18 +99,23 @@ def _walk(root: str, start: str, limit: int, skip_dirs=True) -> Iterable[str]:
 
 
 def extra_paths(root: str, patterns: List[str]) -> List[str]:
-    """Existing files under brief must_not_touch patterns, including git-ignored ones (.env)."""
+    """Existing files under brief must_not_touch patterns, including git-ignored ones (.env).
+    Each pattern must resolve inside root without crossing a symlink; '.' and '' are refused."""
     out: List[str] = []
     for pat in patterns[:300]:
-        if not safe_rel(pat.rstrip("/") or "x") or pat.rstrip("/") in ("", ".git"):
+        raw = pat.rstrip("/")
+        rel = resolve_in_root(raw, root) if raw and raw != "." else None
+        if rel is None or rel != raw:
+            continue  # escapes, normalises to something else, or goes through a symlink
+        abs_p = os.path.join(root, rel)
+        try:
+            st = os.lstat(abs_p)
+        except OSError:
             continue
-        abs_p = os.path.join(root, pat.rstrip("/"))
-        if os.path.islink(abs_p):
-            out.append(pat.rstrip("/"))
-        elif os.path.isdir(abs_p):
+        if stat.S_ISDIR(st.st_mode):
             out.extend(_walk(root, abs_p, MAX_EXTRA_FILES - len(out), skip_dirs=False))
-        elif os.path.lexists(abs_p):
-            out.append(pat.rstrip("/"))
+        else:
+            out.append(rel)
         if len(out) >= MAX_EXTRA_FILES:
             break
     return out

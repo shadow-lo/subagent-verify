@@ -139,7 +139,7 @@ _NEGATION = re.compile(
     r"did(?:n'?t| not) (?:modify|change|touch|edit|update|create|delete|remove)|unchanged|untouched|"
     r"left (?:as is|alone)|without (?:changing|modifying|touching)|"
     r"(?:would|should|could|might|must)(?:n'?t| not)?\s+(?:also\s+)?(?:be|have|get|need)|"
-    r"need(?:s|ed)? to|going to|plan(?:ned)? to|want(?:ed)? to|todo|follow[- ]up|next step|if you|"
+    r"need(?:s|ed)? to|going to|plan(?:ned)? to|want(?:ed)? to|todo|follow[- ]up|next step|"
     r"nothing (?:needed|to|was)|no need|didn'?t (?:find|need)|did not (?:find|need)|not needed|"
     r"wasn'?t|was not|weren'?t|were not|haven'?t|have not|hasn'?t|has not|already (?:up to date|correct)|"
     r"değiştirmedim|dokunmadım|değişmedi|güncellemedim|aynı kaldı|gerekiyor|yapılmalı|gerek yok|"
@@ -159,6 +159,7 @@ _TESTS_PASSED = re.compile(
     r"(?i)\b(?:all )?(?:\d+ )?tests? (?:now )?(?:pass(?:ed|es)?|are passing|is passing|succeeded|green)\b|"
     r"\btestler(?:in tamamı)? (?:geçti|başarılı|geçiyor)"
 )
+_TESTS_NEG = re.compile(r"(?i)(?:\b(?:not|never|no|some|most|if|once|until|when|should|will|would)\b|n't\b|değil)")
 _COMPLETION = re.compile(r"(?i)\b(?:done|completed|finished|implemented|tamamlandı|bitti|tamamladım)\b")
 
 
@@ -196,21 +197,49 @@ def _tokens(line: str):
             yield tok, "/" in tok, m.start()
 
 
-def _kind_near(line: str, pos: int) -> Optional[str]:
-    """Kind of the verb closest before `pos` (or, failing that, the first one after it)."""
+_BULLET_BASE = re.compile(
+    r"(?i)^\s*(?:[-*+•]|\d+[.)])\s+(?:\*\*)?(add|create|write|update|modify|edit|change|fix|refactor|rename|"
+    r"implement|patch|save|delete|remove)\b")
+_BASE_KIND = {"add": CREATE, "create": CREATE, "write": CREATE, "delete": DELETE, "remove": DELETE}
+NEG_WINDOW = 15   # characters before the verb (or path) that a negation may sit in
+
+
+def _verb_near(line: str, pos: int):
+    """(start, end, kind) of the verb closest before `pos`, else the first one after it."""
     best_before, best_after = None, None
     for kind, pat in _VERB.items():
         for m in pat.finditer(line):
             if m.start() < pos and (best_before is None or m.start() > best_before[0]):
-                best_before = (m.start(), kind)
+                best_before = (m.start(), m.end(), kind)
             elif m.start() >= pos and (best_after is None or m.start() < best_after[0]):
-                best_after = (m.start(), kind)
-    pick = best_before or best_after
-    if not pick:
+                best_after = (m.start(), m.end(), kind)
+    if best_before is None:
+        b = _BULLET_BASE.match(line)
+        if b and b.start(1) < pos:
+            best_before = (b.start(1), b.end(1), _BASE_KIND.get(b.group(1).lower(), MODIFY))
+    return best_before or best_after
+
+
+def _kind_near(line: str, pos: int) -> Optional[str]:
+    v = _verb_near(line, pos)
+    if not v:
         return None
-    if pick[1] == DELETE and re.search(r"(?i)\bfrom\b|'?(?:dan|den|tan|ten)\b", line[pick[0]:]):
+    if v[2] == DELETE and re.search(r"(?i)\bfrom\b|'?(?:dan|den|tan|ten)\b", line[v[0]:]):
         return MODIFY
-    return pick[1]
+    if v[2] == CREATE and v[1] <= pos and re.search(r"(?i)\b(?:to|in|into|inside)\s*`?$", line[v[1]:pos]):
+        return MODIFY   # "added X to `f`" changes f, it does not create it
+    return v[2]
+
+
+def _negated(line: str, tok_pos: int, tok_len: int) -> bool:
+    """A negation only cancels a claim when it sits between the verb and the path, or just
+    before whichever comes first ("I have not updated x", "x should be updated")."""
+    v = _verb_near(line, tok_pos)
+    if v is None:
+        return bool(_NEGATION.search(line))
+    start = max(0, min(v[0], tok_pos) - NEG_WINDOW)
+    end = max(v[1], tok_pos + tok_len)
+    return bool(_NEGATION.search(line[start:end]))
 
 
 def _kind_of(line: str, header_kind: Optional[str] = None) -> Optional[str]:
@@ -269,13 +298,13 @@ def parse_text_claims(text: str) -> List[Claim]:
             header_kind = (DELETE if re.search(r"delet|remov|silinen", low)
                            else CREATE if re.search(r"creat|new|added|oluşturulan", low) else MODIFY)
             continue
-        if _NEGATION.search(line):
-            continue
         is_item = bool(re.match(r"^\s*(?:[-*+•]|\d+[.)])\s+", line))
         if header_kind and is_item:
             kind = _kind_of(line, header_kind)
         elif _is_claim_line(line):
             kind = _kind_of(line)
+        elif _BULLET_BASE.match(line):
+            kind = _BASE_KIND.get(_BULLET_BASE.match(line).group(1).lower(), MODIFY)
         else:
             if header_kind and not is_item:
                 header_kind = None
@@ -283,6 +312,8 @@ def parse_text_claims(text: str) -> List[Claim]:
         if not kind:
             continue
         for tok, strong, pos in _tokens(line):
+            if _negated(line, pos, len(tok) + 2):
+                continue
             tok_kind = _kind_near(line, pos) or kind
             claims.append(Claim(tok, tok_kind, "text", strong))
             if len(claims) >= MAX_CLAIMS:
@@ -310,7 +341,10 @@ def extract(text: str) -> Claims:
         seen[c.token] = len(files)
         files.append(c)
     plain = strip_fences(text)
-    tests_passed = rep.tests == "passed" or any(
-        _TESTS_PASSED.search(ln) and not _NEGATION.search(ln) for ln in plain.splitlines()[:MAX_LINES])
+    tests_passed = rep.tests == "passed"
+    for ln in plain.splitlines()[:MAX_LINES]:
+        for m in _TESTS_PASSED.finditer(ln[:500]):
+            if not _TESTS_NEG.search(ln[max(0, m.start() - 25):m.end()]):
+                tests_passed = True
     completion = rep.status == "done" if rep.present else bool(_COMPLETION.search(plain[-2000:]))
     return Claims(rep, files[:MAX_CLAIMS], tests_passed, completion)

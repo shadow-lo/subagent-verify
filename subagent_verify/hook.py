@@ -122,12 +122,15 @@ def _open_own_file(dfd: int, name: str, flags: int) -> Optional[int]:
         fd = os.open(name, flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), 0o600, dir_fd=dfd)
     except OSError:
         return None
-    st = os.fstat(fd)
-    if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1
-            or (hasattr(os, "getuid") and st.st_uid != os.getuid())):
-        os.close(fd)
-        return None
-    return fd
+    try:
+        st = os.fstat(fd)
+        if (stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+                and (not hasattr(os, "getuid") or st.st_uid == os.getuid())):
+            return fd
+    except OSError:
+        pass
+    os.close(fd)
+    return None
 
 
 def _log_result(root: str, settings: policy.Settings, res, agent_type: str) -> None:
