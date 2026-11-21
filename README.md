@@ -8,7 +8,7 @@
 <p align="center">
   <img alt="Python stdlib" src="https://img.shields.io/badge/Python-3%20stdlib-3776AB?logo=python&logoColor=white">
   <img alt="No telemetry" src="https://img.shields.io/badge/telemetry-none-16A34A">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-89%20passing-F97316">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-90%20passing-F97316">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
@@ -137,7 +137,7 @@ No shell, no network, no dependencies, isolated Python, hardened read-only git, 
 cd tests && python3 -m unittest -v
 ```
 
-89 tests: claim parsing (EN/TR), path safety, redaction, every hook event end to end against real temporary git repos, quota-pilot and brief integration, and security cases (malicious `core.fsmonitor` and clean/smudge filters, brief tampering by the subagent, traversal ids, shell metacharacters in paths, planted modules, symlinked and hard-linked log files, symlinked and `/dev/zero` transcripts, line-separator injection). `tests/test_audit.py` holds one regression test per finding of the independent audit.
+90 tests: claim parsing (EN/TR), path safety, redaction, every hook event end to end against real temporary git repos, quota-pilot and brief integration, and security cases (malicious `core.fsmonitor` and clean/smudge filters, brief tampering by the subagent, traversal ids, shell metacharacters in paths, planted modules, symlinked and hard-linked log files, symlinked and `/dev/zero` transcripts, line-separator injection). `tests/test_audit.py` holds one regression test per finding of the independent audit.
 
 ## 🗂️ Layout
 

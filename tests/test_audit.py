@@ -294,3 +294,12 @@ class TestAuditRound3(unittest.TestCase):
     def test_negation_in_earlier_clause(self):
         self.assertTrue(claims.extract("No tests failed, all tests passed.").tests_passed_claimed)
         self.assertFalse(claims.extract("Not all tests pass yet.").tests_passed_claimed)
+
+
+class TestAuditRound4(unittest.TestCase):
+    def test_more_test_runners_recognised(self):
+        from subagent_verify.transcript import TEST_CMD
+        for c in ["python manage.py test", "./run_tests.sh", "make ci", "npm run test:unit", "uv run pytest -q"]:
+            self.assertTrue(TEST_CMD.search(c), c)
+        for c in ["echo hello", "ls tests/", "git status"]:
+            self.assertFalse(TEST_CMD.search(c), c)

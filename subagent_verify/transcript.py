@@ -22,7 +22,10 @@ TEST_CMD = re.compile(
     r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
     r"(?:mvn|mvnw|gradle|gradlew)\s+(?:\S+\s+)*test|make\s+(?:\S+\s+)*(?:test|check)|"
     r"dotnet\s+test|swift\s+test|mix\s+test|deno\s+test|bats|rake\s+test|"
-    r"python[\d.]*\s+(?:-\w+\s+)*-m\s+(?:pytest|unittest))(?:$|[\s;&|)])"
+    r"python[\d.]*\s+(?:-\w+\s+)*-m\s+(?:pytest|unittest)|(?:\S*/)?manage\.py\s+test|"
+    r"make\s+(?:\S+\s+)*ci|(?:\./|\S+/)?\S*tests?\S*\.sh|"
+    r"(?:npm|pnpm|yarn|bun)\s+run\s+\S*test\S*|hatch\s+(?:run\s+)?test|poetry\s+run\s+pytest|uv\s+run\s+pytest)"
+    r"(?:$|[\s;&|)])"
 )
 
 
