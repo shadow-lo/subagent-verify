@@ -1,30 +1,26 @@
-<h1 align="center">subagent-verify</h1>
-<p align="center"><b>A Claude Code hook that checks whether the files a subagent says it changed really changed, and tells the main agent when they didn't.</b></p>
+<div align="center">
 
-<p align="center">
-  <img alt="Claude Code hook" src="https://img.shields.io/badge/Claude%20Code-hook-8B5CF6?style=for-the-badge">
-  <img alt="Zero dependencies" src="https://img.shields.io/badge/zero-dependencies-22D3EE?style=for-the-badge">
-</p>
-<p align="center">
-  <img alt="Python stdlib" src="https://img.shields.io/badge/Python-3%20stdlib-3776AB?logo=python&logoColor=white">
-  <img alt="No telemetry" src="https://img.shields.io/badge/telemetry-none-16A34A">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-90%20passing-F97316">
-  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
-</p>
+# 🕵️ subagent-verify
 
-<p align="center">
-  <a href="#-install">Install</a> ·
-  <a href="#️-how-it-works">How it works</a> ·
-  <a href="#-works-with-quota-pilot-and-issue-to-brief">quota-pilot & issue-to-brief</a> ·
-  <a href="#-security">Security</a> ·
-  <a href="README.tr.md">Türkçe</a>
-</p>
+**Check whether the files a subagent says it changed really changed, and tell the main agent when they didn't.**
+
+[![test](https://github.com/shadow-lo/subagent-verify/actions/workflows/test.yml/badge.svg)](https://github.com/shadow-lo/subagent-verify/actions/workflows/test.yml)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
+![Offline](https://img.shields.io/badge/network-none-lightgrey)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+
+[Türkçe](README.tr.md)
+
+</div>
+
+## ✨ Why
 
 A subagent finishes and says *"I updated `src/app.py` and added tests, all tests pass."* The main agent usually believes it. subagent-verify checks it first, against git, the filesystem and the subagent's own tool calls, and puts the result in front of the main agent before it reports success to you.
 
 It is a sibling of [intent-check](https://github.com/shadow-lo/intent-check): intent-check asks *"does the work match what you asked for?"*, subagent-verify asks *"did the subagent actually do what it says it did?"*
 
-## ✨ What it catches
+## 🔎 What it catches
 
 | Code | Meaning |
 |---|---|
@@ -53,7 +49,7 @@ Do not report this work as done yet: inspect with `git status` / `git diff -- <p
 
 ## 📦 Install
 
-Needs `python3` (tested on 3.13, standard library only) and `git` on `PATH`.
+Needs Python 3.9+ (standard library only, no dependencies) and `git` on `PATH`.
 
 **As a plugin** (the repo contains `.claude-plugin/plugin.json` and `hooks/hooks.json`): add it from a marketplace or local path with `/plugin`.
 
@@ -88,7 +84,7 @@ Names may be plugin-namespaced (`quota-pilot:haiku-worker`). Read-only types (`E
 
 ## 🔗 Works with quota-pilot and issue-to-brief
 
-**[quota-pilot](https://github.com/shadow-lo)** routes work to cheaper Haiku/Sonnet subagents near the 5-hour limit. Cheaper models are exactly where unverified claims hurt, so:
+**[quota-pilot](https://github.com/shadow-lo/quota-pilot)** routes work to cheaper Haiku/Sonnet subagents near the 5-hour limit. Cheaper models are exactly where unverified claims hurt, so:
 
 - `haiku-worker` is strictest and `sonnet-worker` strict by default; `delegated-agents.json` (`<project>/.claude/quota-pilot/`, `~/.claude/quota-pilot/`, or `SUBAGENT_VERIFY_DELEGATED`) adds more. It can only raise strictness, never turn checks off or relabel the built-in tiers.
 - The worker's `## WORKER REPORT` (`status`, `files_changed`, `commands_run`, `tests`, `notes`; bold keys are accepted) is checked field by field: every file in `files_changed` must really have changed (deleted files and directories are understood), every command in `commands_run` must appear in the transcript, `tests: passed` needs a real, successful test run, and missing fields are flagged.
@@ -98,7 +94,7 @@ Names may be plugin-namespaced (`quota-pilot:haiku-worker`). Read-only types (`E
   {"schema":1,"ts":"2026-11-20T23:10:00Z","agent_type":"haiku-worker","tier":"haiku","verdict":"fail","unverified_claims":1,"missing_report":false}
   ```
 
-**[issue-to-brief](https://github.com/shadow-lo)** turns a GitHub issue into an agent-ready brief and writes `<project>/.claude/briefs/current.json` (schema 1). When it exists (or `SUBAGENT_VERIFY_BRIEF` points to one):
+**[issue-to-brief](https://github.com/shadow-lo/issue-to-brief)** turns a GitHub issue into an agent-ready brief and writes `<project>/.claude/briefs/current.json` (schema 1). When it exists (or `SUBAGENT_VERIFY_BRIEF` points to one):
 
 - any change under `files.must_not_touch` (for example `.github/`, `.claude/`, `.env`) is a `PROTECTED` failure, git-ignored files included;
 - the brief is read **before** the subagent runs and merged with the current one, so a subagent that edits or deletes the brief cannot remove a protection (and gets `CONTROL_CHANGED`);
@@ -118,7 +114,7 @@ Names may be plugin-namespaced (`quota-pilot:haiku-worker`). Read-only types (`E
 | `SUBAGENT_VERIFY_STATE_DIR` | env | where snapshots live (default `~/.local/state/subagent-verify`) |
 | `.claude/subagent-verify.json` | project | `{"mode": "strict", "strict_agents": [...]}`; can only make checks stricter (other keys are ignored) |
 
-## 🔒 Security
+## 🛡️ Security
 
 No shell, no network, no dependencies, isolated Python, hardened read-only git, path-traversal and symlink protection, secrets redacted, nothing from a brief executed, project files can't disable it. Details: [SECURITY.md](SECURITY.md).
 
@@ -131,7 +127,7 @@ No shell, no network, no dependencies, isolated Python, hardened read-only git, 
 - **Background subagents** (`run_in_background`) never pass through `PostToolUse`, so they are checked at `SubagentStop`, where a hook can only talk to the subagent. On hard evidence of a false claim the subagent is blocked once and asked to correct itself; in a real run it then replied "I did not change `calc.py` ... that claim was false". Soft problems of non-strict background agents are not reported.
 - It proves a file changed, not that the change is correct. Pair it with tests, or with intent-check.
 
-## 🧪 Tests
+## 🧪 Development
 
 ```bash
 cd tests && python3 -m unittest -v

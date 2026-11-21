@@ -1,13 +1,26 @@
-<h1 align="center">subagent-verify</h1>
-<p align="center"><b>Bir alt ajanın "değiştirdim" dediği dosyaların gerçekten değişip değişmediğini kontrol eden, değişmediyse ana ajanı uyaran Claude Code hook'u.</b></p>
+<div align="center">
 
-<p align="center"><a href="README.md">English</a></p>
+# 🕵️ subagent-verify
+
+**Bir alt ajanın "değiştirdim" dediği dosyaların gerçekten değişip değişmediğini kontrol eder, değişmediyse ana ajanı uyarır.**
+
+[![test](https://github.com/shadow-lo/subagent-verify/actions/workflows/test.yml/badge.svg)](https://github.com/shadow-lo/subagent-verify/actions/workflows/test.yml)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![Bağımlılık](https://img.shields.io/badge/ba%C4%9F%C4%B1ml%C4%B1l%C4%B1k-0-brightgreen)
+![Çevrimdışı](https://img.shields.io/badge/a%C4%9F-yok-lightgrey)
+[![Lisans: MIT](https://img.shields.io/badge/lisans-MIT-yellow.svg)](LICENSE)
+
+[English](README.md)
+
+</div>
+
+## ✨ Neden
 
 Bir alt ajan işini bitirip *"`src/app.py` dosyasını güncelledim, testleri ekledim, tüm testler geçti"* der. Ana ajan genelde buna inanır. subagent-verify önce git'e, dosya sistemine ve alt ajanın kendi araç çağrılarına bakar; sonucu, ana ajan sana "tamamlandı" demeden önce onun önüne koyar.
 
 [intent-check](https://github.com/shadow-lo/intent-check)'in kardeşidir: intent-check *"yapılan iş istenenle uyuşuyor mu?"* diye sorar, subagent-verify *"alt ajan söylediğini gerçekten yaptı mı?"* diye sorar.
 
-## ✨ Neyi yakalar
+## 🔎 Neyi yakalar
 
 | Kod | Anlamı |
 |---|---|
@@ -41,7 +54,7 @@ git clone https://github.com/shadow-lo/subagent-verify .claude/hooks/subagent-ve
 - **quota-pilot:** `sonnet-worker` katı, `haiku-worker` ve Haiku modelde çalışan her alt ajan en katı seviyededir (en katı seviyede rapor eksikleri, kanıtsız test iddiaları ve bahsedilmeyen yazmalar da hata sayılır). `commands_run` içindeki her komutun transkriptte gerçekten çalıştırılmış olması gerekir. WORKER REPORT içindeki `files_changed` listesindeki her dosya gerçekten değişmiş olmalı, `tests: passed` için gerçek test çalıştırması gerekir. Her kontrol `.claude/subagent-verify/results.jsonl` dosyasına yalnızca meta veri içeren bir satır yazar; quota-pilot bunu okuyup sürekli hata yapan ucuz işçiyi bir üst seviyeye çıkarabilir.
 - **issue-to-brief:** `.claude/briefs/current.json` varsa `must_not_touch` altındaki her değişiklik (git'in yok saydığı `.env` gibi dosyalar dahil) `PROTECTED` hatasıdır; brief alt ajan çalışmadan **önce** okunur, bu yüzden alt ajan brief'i silse ya da değiştirse de korumayı kaldıramaz (`CONTROL_CHANGED`); iş bitti denildiğinde dokunulmamış `likely` dosyalar ve kabul kriterleri ana ajana listelenir. Brief GitHub issue metninden geldiği için güvenilmez kabul edilir: asla çalıştırılmaz, yolları doğrulanır, metni kısaltılıp temizlenir.
 
-## 🔒 Güvenlik
+## 🛡️ Güvenlik
 
 Shell yok, ağ yok, bağımlılık yok; `git status` hiç çalıştırılmaz (repo içine yerleştirilmiş bir filtre programı çalışamasın diye dosyalar `git ls-files` ile listelenip hook tarafından hash'lenir); sonuç dosyası symlink ya da hard link ile proje dışına yönlendirilemez; Python izole modda (`-I`) çalışır; git çağrıları sabit argümanlarla ve programı çalıştırabilecek repo ayarları kapatılarak yapılır; path traversal ve symlink kaçışı engellenir; gizli bilgiler `[REDACTED]` ile maskelenir; proje içindeki dosyalar kontrolü kapatamaz, yalnızca sıkılaştırabilir. Ayrıntılar: [SECURITY.md](SECURITY.md).
 
