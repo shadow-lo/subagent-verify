@@ -18,9 +18,16 @@ _R = "[REDACTED]"
 _NB = r"(?<![A-Za-z0-9])"          # start boundary that also works after "_"
 # Key names end with a secret-ish word (GITHUB_TOKEN, db_password, api-key). The prefix is
 # bounded and anchored so matching stays linear (no ReDoS on attacker-written text).
-_KEYNAME = (r"(?<![A-Za-z0-9_.\-])([A-Za-z0-9_.\-]{0,40}?(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|"
-            r"access[_-]?key|private[_-]?key|client[_-]?secret|credentials?|auth[_-]?token|authorization))")
-# A value counts as a secret when it is quoted, contains a digit, or is long (avoids "token: refreshed").
+_PFX = r"(?<![A-Za-z0-9_.\-])([A-Za-z0-9_.\-]{0,64}?"
+# Names whose value is always secret: any value of 3+ characters is redacted.
+_KEY_STRONG = _PFX + (r"(?:password|passwd|pwd|passphrase|secret|"
+                      r"(?:secret|signing|private|session|encryption|master|app)[_-]?key))")
+# Names whose value is usually secret: redacted when quoted, containing a digit, or 12+ chars
+# (keeps prose such as "token: refreshed hourly" readable).
+_KEY_WEAK = _PFX + (r"(?:token|api[_-]?key|apikey|access[_-]?key|client[_-]?secret|credentials?|"
+                    r"auth[_-]?token|authorization|[_-]key))")
+_SEP = r"([ \t]{0,3}[:=][ \t]{0,3})"
+_ANY_VALUE = r"(?:\"[^\"\n]{1,200}\"|'[^'\n]{1,200}'|[^\s,;\"']{3,200})"
 _VALUE = r"(?:\"[^\"\n]{3,200}\"|'[^'\n]{3,200}'|(?=[^\s,;\"']{0,200}[0-9])[^\s,;\"']{3,200}|[^\s,;\"']{12,200})"
 _SECRET_PATTERNS = [
     (re.compile(r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----.*?(?:-----END [A-Z ]{0,40}PRIVATE KEY-----|$)", re.S), _R),
@@ -38,7 +45,8 @@ _SECRET_PATTERNS = [
     (re.compile(_NB + r"eyJ[A-Za-z0-9_\-]{8,2000}\.[A-Za-z0-9_\-]{8,2000}\.[A-Za-z0-9_\-]{8,2000}"), _R),
     (re.compile(r"(?i)\b(bearer|basic)[ \t]{1,5}[A-Za-z0-9._\-~+/]{12,2000}=*"), r"\1 " + _R),
     (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,20}://)[^\s:/@]{1,200}:[^\s@/]{1,200}@"), r"\1" + _R + "@"),
-    (re.compile(r"(?i)" + _KEYNAME + r"([ \t]{0,3}[:=][ \t]{0,3})" + _VALUE), r"\1\2" + _R),
+    (re.compile(r"(?i)" + _KEY_STRONG + _SEP + r"(?!\[REDACTED\])" + _ANY_VALUE), r"\1\2" + _R),
+    (re.compile(r"(?i)" + _KEY_WEAK + _SEP + r"(?!\[REDACTED\])" + _VALUE), r"\1\2" + _R),
     # long mixed-case base64-ish blobs; '/', '.', '_' and '-' are excluded so file paths survive
     (re.compile(r"(?<![A-Za-z0-9+/._\-])(?=[A-Za-z0-9+]{0,200}[0-9])(?=[A-Za-z0-9+]{0,200}[A-Z])"
                 r"(?=[A-Za-z0-9+]{0,200}[a-z])[A-Za-z0-9+]{40,512}={0,2}(?![A-Za-z0-9+/._\-])"), _R),

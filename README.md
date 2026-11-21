@@ -8,7 +8,7 @@
 <p align="center">
   <img alt="Python stdlib" src="https://img.shields.io/badge/Python-3%20stdlib-3776AB?logo=python&logoColor=white">
   <img alt="No telemetry" src="https://img.shields.io/badge/telemetry-none-16A34A">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-87%20passing-F97316">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-89%20passing-F97316">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
@@ -72,7 +72,7 @@ then merge [`examples/settings.json`](examples/settings.json) into `.claude/sett
 | `PreToolUse` (`Task\|Agent`) | Snapshots the working tree: `HEAD` plus a SHA-256 fingerprint of every tracked and untracked file (listed with `git ls-files`, hashed by the hook itself, 512 MB budget then size+mtime), plus git-ignored files the brief protects. Also stores the brief and strict-agent list as they were **before** the run. Stored privately, keyed by `tool_use_id`, so parallel subagents don't mix. |
 | `SubagentStart` | Same snapshot keyed by `agent_id` (covers background subagents). Reminds quota-pilot workers of the report contract. |
 | `PostToolUse` (`Task\|Agent`) | Reads the subagent's final message, extracts claims, compares with a fresh snapshot (commits made by the subagent count, via `git diff old..new`). On failure it returns `decision: "block"` with the reason, which makes the main agent read it (nothing is undone). Warnings go in as `additionalContext`. Silent when everything checks out. |
-| `SubagentStop` | Uses the snapshot and the subagent transcript (which files it wrote with tools, which commands it ran and whether they failed). For **strict** agents it blocks the stop **once** so the subagent can do the work or correct its report. |
+| `SubagentStop` | Uses the snapshot and the subagent transcript (which files it wrote with tools, which commands it ran and whether they failed). It blocks the stop **once** so the subagent can do the work or correct its report: for strict agents on any failure, for other agents only on hard evidence (`UNCHANGED`, `MISSING`, `NOT_DELETED`, `TESTS_NOT_RUN`, `TESTS_FAILED`, `PROTECTED`). |
 
 **Claims** come from two places. A structured `## WORKER REPORT` block is parsed exactly. Free prose is parsed conservatively: only first-person or bullet-style statements (*"I updated `x`"*, *"- Created tests/y.py"*, *"src/z.py dosyasını güncelledim"*) and `Files changed:` lists count. Descriptions (*"the config is created in config.py"*), negations (*"I did not modify c.py"*), code blocks and URLs are ignored. English and Turkish are supported.
 
@@ -128,7 +128,7 @@ No shell, no network, no dependencies, isolated Python, hardened read-only git, 
 - **Parallel subagents** can change the same files; unclaimed changes are reported as notes, not failures, for that reason.
 - **Git-ignored files** are not snapshotted (except those the brief protects); claims about them are judged by modification time.
 - **Large repos:** beyond 512 MB of hashing per snapshot, files are fingerprinted by size and modification time.
-- **Background subagents** (`run_in_background`) are checked at `SubagentStop`, where Claude Code only lets a hook talk to the subagent, so for non-strict ones the main agent is not told.
+- **Background subagents** (`run_in_background`) never pass through `PostToolUse`, so they are checked at `SubagentStop`, where a hook can only talk to the subagent. On hard evidence of a false claim the subagent is blocked once and asked to correct itself; in a real run it then replied "I did not change `calc.py` ... that claim was false". Soft problems of non-strict background agents are not reported.
 - It proves a file changed, not that the change is correct. Pair it with tests, or with intent-check.
 
 ## 🧪 Tests
@@ -137,7 +137,7 @@ No shell, no network, no dependencies, isolated Python, hardened read-only git, 
 cd tests && python3 -m unittest -v
 ```
 
-87 tests: claim parsing (EN/TR), path safety, redaction, every hook event end to end against real temporary git repos, quota-pilot and brief integration, and security cases (malicious `core.fsmonitor` and clean/smudge filters, brief tampering by the subagent, traversal ids, shell metacharacters in paths, planted modules, symlinked and hard-linked log files, symlinked and `/dev/zero` transcripts, line-separator injection). `tests/test_audit.py` holds one regression test per finding of the independent audit.
+89 tests: claim parsing (EN/TR), path safety, redaction, every hook event end to end against real temporary git repos, quota-pilot and brief integration, and security cases (malicious `core.fsmonitor` and clean/smudge filters, brief tampering by the subagent, traversal ids, shell metacharacters in paths, planted modules, symlinked and hard-linked log files, symlinked and `/dev/zero` transcripts, line-separator injection). `tests/test_audit.py` holds one regression test per finding of the independent audit.
 
 ## 🗂️ Layout
 

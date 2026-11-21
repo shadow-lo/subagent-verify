@@ -198,8 +198,8 @@ class TestAuditSubagentStop(HookCase):
         p = self.transcript("claude-haiku-5-5", "I updated `src/gone.py`.")
         out = self.stop(p, "general-purpose")
         self.assertEqual(out["decision"], "block")
-        p = self.transcript("claude-opus-5-5", "I updated `src/gone.py`.")
-        self.assertIsNone(self.stop(p, "general-purpose"))
+        p = self.transcript("claude-opus-5-5", "Done" + report(files="src/app.py"))
+        self.assertIsNone(self.stop(p, "general-purpose"))  # unchanged but no timing: soft only
 
     def test_commands_run_cross_checked(self):
         self.write("src/app.py", "v2\n")
@@ -282,3 +282,15 @@ class TestAuditRound2(HookCase):
         os.makedirs(os.path.join(self.root, "a"))
         os.symlink(outside, os.path.join(self.root, "a", "link"))
         self.assertEqual(snapshot.extra_paths(self.root, ["a/link/sub/", "a/link/", "./", ".", "../outside/"]), [])
+
+
+class TestAuditRound3(unittest.TestCase):
+    def test_key_and_short_password_forms(self):
+        for s in ["SECRET_KEY=abcd1234efgh", "JWT_SECRET_KEY=mysupersecretvalue123",
+                  "SESSION_SIGNING_KEY=Zx9fQ2LmP8vR4tY7", "password=letmein", "DB_PASSWORD=hunter",
+                  "MY_VERY_LONG_SERVICE_ACCOUNT_PRIMARY_DATABASE_PASSWORD=hunter22"]:
+            self.assertTrue(util.clean(s).endswith("=[REDACTED]"), s)
+
+    def test_negation_in_earlier_clause(self):
+        self.assertTrue(claims.extract("No tests failed, all tests passed.").tests_passed_claimed)
+        self.assertFalse(claims.extract("Not all tests pass yet.").tests_passed_claimed)

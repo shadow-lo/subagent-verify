@@ -32,7 +32,7 @@ git clone https://github.com/shadow-lo/subagent-verify .claude/hooks/subagent-ve
 
 - **PreToolUse / SubagentStart:** Alt ajan başlamadan çalışma ağacının anlık görüntüsü alınır (HEAD + kirli/izlenmeyen her dosyanın SHA-256 parmak izi). İçerik değil, yalnızca yol ve parmak izi saklanır; paralel alt ajanlar `tool_use_id` / `agent_id` ile ayrılır.
 - **PostToolUse:** Alt ajanın son mesajındaki iddialar çıkarılır ve yeni anlık görüntüyle karşılaştırılır (alt ajanın yaptığı commit'ler de sayılır). Hata varsa `decision: "block"` ile ana ajana gerekçe okutulur (hiçbir şey geri alınmaz); uyarılar `additionalContext` olarak gider. Her şey doğruysa sessiz kalır.
-- **SubagentStop:** Anlık görüntü + alt ajan transkripti (hangi dosyaları araçla yazdı, hangi komutları çalıştırdı, başarısız oldular mı) kullanılır. **Katı** ajanlarda durma **bir kez** engellenir, alt ajan işi yapar ya da raporunu düzeltir.
+- **SubagentStop:** Anlık görüntü + alt ajan transkripti (hangi dosyaları araçla yazdı, hangi komutları çalıştırdı, başarısız oldular mı) kullanılır. Durma **bir kez** engellenir ve alt ajan işi yapar ya da raporunu düzeltir: katı ajanlarda her hatada, diğerlerinde yalnızca kesin kanıtta (`UNCHANGED`, `MISSING`, `TESTS_NOT_RUN` vb.). Arka planda çalışan alt ajanlar da böylece kapsanır; gerçek bir denemede yalan söyleyen alt ajan "`calc.py` dosyasını değiştirmedim, önceki iddiam yanlıştı" diye düzeltti.
 
 İddialar iki kaynaktan gelir: yapılandırılmış `## WORKER REPORT` bloğu birebir ayrıştırılır; serbest metin ise temkinli okunur (yalnızca birinci tekil şahıs ya da madde işaretli ifadeler ve `Files changed:` listeleri). Türkçe ve İngilizce desteklenir.
 

@@ -344,7 +344,8 @@ def extract(text: str) -> Claims:
     tests_passed = rep.tests == "passed"
     for ln in plain.splitlines()[:MAX_LINES]:
         for m in _TESTS_PASSED.finditer(ln[:500]):
-            if not _TESTS_NEG.search(ln[max(0, m.start() - 25):m.end()]):
+            clause = re.split(r"[,.;:!?]", ln[max(0, m.start() - 25):m.start()])[-1]
+            if not _TESTS_NEG.search(clause + ln[m.start():m.end()]):
                 tests_passed = True
     completion = rep.status == "done" if rep.present else bool(_COMPLETION.search(plain[-2000:]))
     return Claims(rep, files[:MAX_CLAIMS], tests_passed, completion)

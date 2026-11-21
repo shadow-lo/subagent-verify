@@ -343,8 +343,13 @@ class TestSubagentStop(HookCase):
         self.assertIn("UNCHANGED src/app.py", self.message(out))
         self.assertIn("write tool call failed", self.message(out))
 
-    def test_non_strict_agent_not_blocked(self):
+    def test_non_strict_agent_blocked_only_for_hard_evidence(self):
         p = self.transcript(self.entries("I updated `src/gone.py`. All tests pass."))
+        out = self.stop(p, agent="general-purpose")
+        self.assertIn("MISSING src/gone.py", out["reason"])
+        self.assertIn("TESTS_NOT_RUN", out["reason"])
+        # soft problems only (no hard evidence) -> not blocked
+        p = self.transcript(self.entries("Some notes, nothing claimed."))
         self.assertIsNone(self.stop(p, agent="general-purpose"))
 
     def start(self, agent="haiku-worker", agent_id="a1"):

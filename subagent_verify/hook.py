@@ -24,6 +24,7 @@ from .util import MAX_STDIN_BYTES, clean
 from .verify import FAIL, render, verify
 
 AGENT_TOOLS = {"Task", "Agent"}
+HARD_FAILS = {"UNCHANGED", "MISSING", "NOT_DELETED", "TESTS_NOT_RUN", "TESTS_FAILED", "PROTECTED"}
 MAX_RESPONSE_TEXT = 200_000
 RESULTS_MAX_BYTES = 1024 * 1024
 START_REMINDER = ("subagent-verify is active: when you finish, your claims are checked against git and the "
@@ -291,9 +292,15 @@ def handle(payload: dict) -> int:
         res = verify(root, c, agent=agent_type or "subagent", level=level, delegated=delegated, base=base,
                      before=before, evidence=ev if ev.readable else None, brief=brief,
                      control_changed=control_changed)
-        if res.verdict != "fail" or not res.strict or payload.get("stop_hook_active"):
-            return 0  # PostToolUse reports to the main agent; never loop
+        if res.verdict != "fail" or payload.get("stop_hook_active"):
+            return 0  # never loop
         fails = [i for i in res.items if i.level == FAIL]
+        if not res.strict:
+            # Non-strict agents are blocked only for hard evidence of a false claim. This also
+            # covers background subagents, whose result never passes through PostToolUse.
+            fails = [i for i in fails if i.code in HARD_FAILS]
+            if not fails:
+                return 0
         reason = ["subagent-verify found problems with your final report. Before stopping, either do the work "
                   "or correct the report so it only claims what really happened:"]
         reason += [f"- {i.code}{(' ' + i.path) if i.path else ''}: {i.detail}" for i in fails[:15]]
